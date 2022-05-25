@@ -1,0 +1,11 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: volume-nfs-sc
+provisioner: nfs.volume.io
+reclaimPolicy: Delete
+parameters:
+  nfsExportMethod: ganesha
+  # nfsExportMethod: alpine
+  dataBackendStorageClass: "piraeus-local-dflt-r2"
+  # dataBackendStorageClass: "local-path"
