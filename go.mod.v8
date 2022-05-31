@@ -1,0 +1,9 @@
+module sigs.k8s.io/sig-storage-lib-external-provisioner/v8
+
+go 1.18
+
+require (
+	k8s.io/api v0.20.15
+	k8s.io/apimachinery v0.20.15
+	k8s.io/client-go v0.20.15
+)
