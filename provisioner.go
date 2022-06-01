@@ -1,24 +1,18 @@
 package main
 
 import (
-	// "errors"
 	"flag"
-	"os/exec"
 	"strconv"
 	"strings"
-	"bufio"
-	"bytes"
-	// "path"
 	"syscall"
 	"time"
+	"context"
 	
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller"
 
 	corev1 "k8s.io/api/core/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
@@ -27,48 +21,25 @@ import (
 
 func int32Ptr(i int32) *int32 { return &i }
 
-func BytesToString(data []byte) string {
-	return string(data[:])
-}
-
 type volumeNfsProvisioner struct {
+	clientSet *kubernetes.Clientset
 }
 
 // NewVolumeNfsProvisioner creates a new provisioner
-func NewVolumeNfsProvisioner() controller.Provisioner {
-	return &volumeNfsProvisioner{}
-}
-
-func RunExtCmd(name string, args ...string ) string {
-	cmd := exec.Command(name, args...)
-	stderr, err :=cmd.StderrPipe()
-	if err != nil {
-		klog.Info(err)
+func NewVolumeNfsProvisioner(cs *kubernetes.Clientset) controller.Provisioner {
+	return &volumeNfsProvisioner{
+		clientSet: cs,
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		klog.Info(err)
-	}
-	if err := cmd.Start(); err != nil {
-		klog.Info(err)
-	}
-	sc := bufio.NewScanner(stderr)
-	for sc.Scan() {
-		klog.Info(sc.Text())
-	}
-	buf := new(bytes.Buffer)
-	buf.ReadFrom(stdout)
-	output := buf.String()
-	return output
 }
 
 var _ controller.Provisioner = &volumeNfsProvisioner{}
 
 // Provision creates a storage asset and returns a PV object representing it.
-func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*corev1.PersistentVolume, error) {
+func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller.ProvisionOptions) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
 
-	// nfsPvcNs := options.PVC.Namespace
-	// nfsPvcName := options.PVC.Name
+	nfsPvcNs := options.PVC.Namespace
+	nfsPvcName := options.PVC.Name
+	nfsPVcNsName := "[" + nfsPvcNs + "/" + nfsPvcName + "] "
 	nfsPvName	:= options.PVName
 	nfsStsName	:= nfsPvName
 	nfsSvcName	:= nfsStsName
@@ -79,27 +50,16 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 	nfsExporterImage := options.StorageClass.Parameters[ "nfsExporterImage" ]
 	if nfsExporterImage == "" { nfsExporterImage = "daocloud.io/piraeus/volume-nfs-exporter:ganesha" }
 
-	klog.Infof( "Data backend SC is \"%s\"", dataScName )
-	klog.Infof( "NFS Exporter Image is \"%s\"", nfsExporterImage )
+	klog.Infof( nfsPVcNsName + "Data backend SC is \"%s\"", dataScName )
+	klog.Infof( nfsPVcNsName +  "NFS Exporter Image is \"%s\"", nfsExporterImage )
 
 	dataPvcName := strings.Replace(nfsPvName, "pvc-", "data-", 1) + "-0"
 
-	// create k8s clientset
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		panic(err.Error())
-	}
-	clientSet, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
-	klog.Info( "Created Kubernetes Client Set")
-
 	// create Data backend PVC
-	klog.Infof("Creating Data backend PVC \"%s\"", dataPvcName )
+	klog.Infof(nfsPVcNsName + "Creating Data backend PVC \"%s\"", dataPvcName )
 	capacity := options.PVC.Spec.Resources.Requests[corev1.ResourceName(corev1.ResourceStorage)]
 	size := strconv.FormatInt( capacity.Value(), 10 )
-	klog.Infof( "Data backend PVC size is \"%s\"", size )
+	klog.Infof( nfsPVcNsName + "Data backend PVC size is \"%s\"", size )
 
 	dataPvcDef := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -112,13 +72,13 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 			},
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
-					corev1.ResourceName(corev1.ResourceStorage): resource.MustParse(size),
+					corev1.ResourceName(corev1.ResourceStorage): capacity,
 				},
 			},
 		},
 	}
 
-	dataPvc, err := clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Create(dataPvcDef)
+	dataPvc, err := p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Create(context.TODO(),dataPvcDef, metav1.CreateOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -131,12 +91,12 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 		}
 	}
 
-	klog.Infof("Data backend PVC uid is \"%s\"", dataPvcUid )
+	klog.Infof(nfsPVcNsName + "Data backend PVC uid is \"%s\"", dataPvcUid )
 
 	dataPvName := "pvc-" + dataPvcUid
 
 	// create NFS export SVC
-	klog.Infof("NFS Export SVC \"%s\"", nfsSvcName )
+	klog.Infof(nfsPVcNsName + "NFS Export SVC \"%s\"", nfsSvcName )
 	nfsSvcDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nfsSvcName,
@@ -151,20 +111,20 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
 				{
-					Name:          "nfs",
-					Protocol:      corev1.ProtocolTCP,
-					Port:   2049,
+					Name:		"nfs",
+					Protocol:	corev1.ProtocolTCP,
+					Port:		2049,
 				},
 				{
-					Name:          "rpc",
-					Protocol:      corev1.ProtocolTCP,
-					Port:  111,
+					Name:		"rpc",
+					Protocol:	corev1.ProtocolTCP,
+					Port:		111,
 				},
 			},
 		},
 	}
 
-	_, err = clientSet.CoreV1().Services(dataPvcNs).Create(nfsSvcDef)
+	_, err = p.clientSet.CoreV1().Services(dataPvcNs).Create(context.TODO(), nfsSvcDef, metav1.CreateOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -172,22 +132,20 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 	nfsIp := ""
 	for {
 		time.Sleep(1 * time.Second)
-		nfsSvc, err := clientSet.CoreV1().Services(dataPvcNs).Get(nfsSvcName, metav1.GetOptions{})
+		nfsSvc, err := p.clientSet.CoreV1().Services(dataPvcNs).Get(context.TODO(), nfsSvcName, metav1.GetOptions{})
 		if err == nil {
 			nfsIp = nfsSvc.Spec.ClusterIP;
-			klog.Infof("NFS export IP is \"%s\"", nfsIp )
+			klog.Infof(nfsPVcNsName + "NFS export IP is \"%s\"", nfsIp)
 		} else {
-			klog.Infof( "Waiting for NFS SVC to spawn: \"%s\"", nfsSvcName )
+			klog.Infof(nfsPVcNsName + "Waiting for NFS SVC to spawn: \"%s\"", nfsSvcName)
 		}
 		if nfsIp != "" {
 			break
 		} 
 	}
 
-
-
 	// create NFS Export Pod to connect NFS Export SVC with Data backend PVC
-	klog.Infof("Creating NFS export pod by StatefulSet: \"%s\"", nfsStsName )
+	klog.Infof(nfsPVcNsName + "Creating NFS export pod by StatefulSet: \"%s\"", nfsStsName)
 
 	nfsStsDef := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
@@ -246,8 +204,8 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name: "data",
-									MountPath: "/" + dataPvName,
+									Name:		"data",
+									MountPath:	"/" + dataPvName,
 								},
 							},
 						},
@@ -267,7 +225,7 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 		},
 	}
 
-	_, err = clientSet.AppsV1().StatefulSets(dataPvcNs).Create(nfsStsDef)
+	_, err = p.clientSet.AppsV1().StatefulSets(dataPvcNs).Create(context.TODO(), nfsStsDef, metav1.CreateOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -277,12 +235,12 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 	nfsPodStatus := corev1.PodUnknown
 	for {
 		time.Sleep(1 * time.Second)
-		nfsPod, err := clientSet.CoreV1().Pods(dataPvcNs).Get(nfsPodName, metav1.GetOptions{})
+		nfsPod, err := p.clientSet.CoreV1().Pods(dataPvcNs).Get(context.TODO(), nfsPodName, metav1.GetOptions{})
 		if err == nil {
 			nfsPodStatus = nfsPod.Status.Phase;
-			klog.Infof( "NFS export Pod status is: \"%s\"", nfsPodStatus )
+			klog.Infof( nfsPVcNsName + "NFS export Pod status is: \"%s\"", nfsPodStatus )
 		} else {
-			klog.Infof( "Waiting for NFS export Pod to spawn: \"%s\"", nfsPodName )
+			klog.Infof( nfsPVcNsName + "Waiting for NFS export Pod to spawn: \"%s\"", nfsPodName )
 		}
 		if nfsPodStatus == corev1.PodRunning {
 			break
@@ -298,7 +256,7 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 			PersistentVolumeReclaimPolicy: *options.StorageClass.ReclaimPolicy,
 			AccessModes:                   options.PVC.Spec.AccessModes,
 			Capacity: corev1.ResourceList{
-				corev1.ResourceName(corev1.ResourceStorage): options.PVC.Spec.Resources.Requests[corev1.ResourceName(corev1.ResourceStorage)],
+				corev1.ResourceName(corev1.ResourceStorage): capacity,
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				NFS: &corev1.NFSVolumeSource{
@@ -309,36 +267,31 @@ func (p *volumeNfsProvisioner) Provision(options controller.ProvisionOptions) (*
 			},
 		},
 	}
-	return nfsPV, nil
+	return nfsPV, controller.ProvisioningFinished, nil
 }
 
 // Delete removes the storage asset that was created by Provision represented
 // by the given PV.
-func (p *volumeNfsProvisioner) Delete(volume *corev1.PersistentVolume) error {
+func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.PersistentVolume) error {
 	nfsPvName := volume.ObjectMeta.Name
 	nfsStsName := nfsPvName
 	nfsSvcName := nfsStsName
 	dataPvcName := strings.Replace(nfsStsName, "pvc-", "data-", 1) + "-0"
 	dataPvcNs := "volume-nfs"
 
-	// create k8s clientset
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		panic(err.Error())
-	}
-	clientSet, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		panic(err.Error())
-	}
-	klog.Info( "Created Kubernetes Client Set")
-
 	// delete NFS export pod, NFS export svc, and Data Backend PVC
 	klog.Infof("Deleting NFS export Pod by StatfulSet: \"%s\"", nfsStsName )
-	err = clientSet.AppsV1().StatefulSets(dataPvcNs).Delete(nfsStsName, &metav1.DeleteOptions{})
+
+	deletePolicy := metav1.DeletePropagationForeground
+	deleteOptions := metav1.DeleteOptions{
+		PropagationPolicy: &deletePolicy,
+	}
+
+	_ = p.clientSet.AppsV1().StatefulSets(dataPvcNs).Delete(context.TODO(), nfsStsName, deleteOptions)
 	klog.Infof("Deleting NFS export SVC: \"%s\"", nfsSvcName )
-	err = clientSet.CoreV1().Services(dataPvcNs).Delete(nfsSvcName, &metav1.DeleteOptions{})
+	_ = p.clientSet.CoreV1().Services(dataPvcNs).Delete(context.TODO(), nfsSvcName, deleteOptions)
 	klog.Infof("Deleting Data backend PVC: \"%s\"", dataPvcName )
-	err = clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Delete(dataPvcName, &metav1.DeleteOptions{})
+	_ = p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Delete(context.TODO(), dataPvcName, deleteOptions)
 	return nil
 }
 
@@ -371,10 +324,12 @@ func main() {
 
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
-	volumeNfsProvisioner := NewVolumeNfsProvisioner()
+	volumeNfsProvisioner := NewVolumeNfsProvisioner(clientset)
 
 	// Start the provision controller
 	// PVs
 	pc := controller.NewProvisionController(clientset, *provisionerName, volumeNfsProvisioner, serverVersion.GitVersion)
-	pc.Run(wait.NeverStop)
+	
+	// Never stops.
+	pc.Run(context.Background())
 }

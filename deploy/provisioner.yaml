@@ -34,10 +34,7 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
-        resources:
-          limits:
-            cpu: '500m'
-            memory: '500Mi'
+        resources: {}
         args: 
         - -name=nfs.volume.io      
       affinity:
@@ -47,6 +44,9 @@ spec:
             - matchExpressions:
               - key: node-role.kubernetes.io/master
                 operator: Exists
+      tolerations:
+      - effect: NoSchedule
+        operator: Exists
 ---
 apiVersion: v1
 kind: ServiceAccount

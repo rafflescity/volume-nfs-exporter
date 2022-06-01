@@ -5,7 +5,7 @@ metadata:
 provisioner: nfs.volume.io
 reclaimPolicy: Delete
 parameters:
-  nfsExportMethod: ganesha
-  # nfsExportMethod: alpine
-  # dataBackendStorageClass: piraeus-local-dflt-r2
+  nfsExportImage: daocloud.io/piraeus/volume-nfs-exporter:ganesha
+  # dataBackendStorageClass: local-storage-hdd-lvm
   dataBackendStorageClass: local-path
+  # dataBackendStorageClass: piraeus-local-dflt-r2
