@@ -5,6 +5,33 @@ build:
 	chmod -v +x volume-nfs-provisioner
 	chmod -vR +x cmd
 
+run:
+	kubectl create ns volume-nfs || true
+	go run provisioner.go
+
+deploy:
+	kubectl apply -f deploy/rbac.yaml
+	kubectl apply -f deploy/provisioner.yaml
+	watch kubectl get po
+
+undeploy:
+	kubectl delete -f deploy/rbac.yaml
+	kubectl delete -f deploy/provisioner.yaml
+	watch kubectl get po
+
+try: 
+	kubectl create -f example/pvc.yaml
+	kubectl create -f example/nginx-rwx.yaml
+	watch kubectl get po,pvc,svc,pve
+
+untry: 
+	kubectl delete -f example/nginx-rwx.yaml --wait=false || true
+	kubectl delete -f example/pvc.yaml --wait=false || true
+	watch kubectl get po,pvc,svc,pve
+
+check-path:
+	kubectl exec -it deploy/nginx -- mount | grep nfs
+
 provisioner:
 	cp -vf volume-nfs-provisioner docker/
 	docker build . -f docker/Dockerfile.provisioner -t daocloud.io/piraeus/volume-nfs-provisioner

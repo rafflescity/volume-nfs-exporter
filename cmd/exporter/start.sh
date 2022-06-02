@@ -7,13 +7,12 @@ set -e
 : ${GANESHA_OPTIONS:="-N NIV_EVENT"} # NIV_DEBUG
 : ${GANESHA_EPOCH:=""}
 : ${GANESHA_EXPORT_ID:="77"}
-# : ${GANESHA_EXPORT:="/export"}
+: ${GANESHA_EXPORT:="/export"}
 # : ${GANESHA_ACCESS:="*"}
 # : ${GANESHA_ROOT_ACCESS:="*"}
 # : ${GANESHA_NFS_PROTOCOLS:="3,4"}
 # : ${GANESHA_TRANSPORTS:="UDP,TCP"}
-export GANESHA_EXPORT=${EXPORT_PATH:-/export}
-export GANESHA_PSEUDO=${PSEUDO_PATH:-/}
+: ${GANESHA_PSEUDO:="/"}
 
 function bootstrap_config {
 	echo "Bootstrapping Ganesha NFS config"

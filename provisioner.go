@@ -6,28 +6,40 @@ import (
 	"syscall"
 	"time"
 	"context"
+	"os"
 	
 	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller"
 
 	corev1 "k8s.io/api/core/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/klog"
 )
 
-
 func int32Ptr(i int32) *int32 { return &i }
+
+var pveRes = schema.GroupVersionResource{
+	Group: "nfs.volume.io", 
+	Version: "v1alpha1", 
+	Resource: "volumeexports",
+}
 
 type volumeNfsProvisioner struct {
 	clientSet *kubernetes.Clientset
+	dclientSet dynamic.Interface
 }
 
 // NewVolumeNfsProvisioner creates a new provisioner
-func NewVolumeNfsProvisioner(cs *kubernetes.Clientset) controller.Provisioner {
+func NewVolumeNfsProvisioner(cs *kubernetes.Clientset, dcs dynamic.Interface) controller.Provisioner {
 	return &volumeNfsProvisioner{
 		clientSet: cs,
+		dclientSet: dcs,
 	}
 }
 
@@ -87,6 +99,8 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	if err != nil {
 		panic(err)
 	}
+
+
 
 	dataPvcUid := dataPvc.ObjectMeta.UID
 	dataPvcUidStr := string(dataPvcUid)
@@ -172,10 +186,10 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion:         "v1",
-					Kind:               "PersistentVolumeClaim",
-					Name:               dataPvcName,
-					UID:                dataPvcUid,
+					APIVersion:	"v1",
+					Kind:		"PersistentVolumeClaim",
+					Name:		dataPvcName,
+					UID:		dataPvcUid,
 				},
 			},
 		},
@@ -227,20 +241,10 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 									ContainerPort: 111,
 								},
 							},
-							Env: []corev1.EnvVar{
-								{
-									Name: "EXPORT_PATH",
-									Value: "/" + dataPvName,
-								},
-								{
-									Name: "PSEUDO_PATH",
-									Value: "/" + dataPvName,
-								},
-							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:		"data",
-									MountPath:	"/" + dataPvName,
+									MountPath:	"/export",
 								},
 							},
 						},
@@ -282,7 +286,24 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		}
 	}
 
-	// create NFS PV (and return it)
+	// Create CRD
+	pveDef := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "nfs.volume.io/v1alpha1",
+			"kind":       "VolumeExport",
+			"metadata": map[string]interface{}{
+				"name": nfsPvName,
+			},
+			"spec": map[string]interface{}{
+				"dataVolume": dataPvName,
+				"nfsExport":  nfsIp + ":/",
+			},
+		},
+	}
+	_, err = p.dclientSet.Resource(pveRes).Create(context.TODO(), pveDef, metav1.CreateOptions{})
+	klog.Infof( nfsPvcTitle + "Creating CRD: \"%s\"", err )
+
+	// Create NFS PV (and return it)
 	nfsPV := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
@@ -301,7 +322,7 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				NFS: &corev1.NFSVolumeSource{
 					Server:   nfsIp,
-					Path:     "/" + dataPvName,
+					Path:     "/",
 					ReadOnly: false,
 				},
 			},
@@ -318,6 +339,7 @@ func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.Persis
 	nfsSvcName := nfsStsName
 	dataPvcName := nfsStsName + "-0"
 	dataPvcNs := "volume-nfs"
+	pveName := nfsPvName
 
 	deletePolicy := metav1.DeletePropagationForeground
 	deleteOptions := metav1.DeleteOptions{
@@ -337,6 +359,8 @@ func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.Persis
 	_ = p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Delete(context.TODO(), dataPvcName, deleteOptions)
 	klog.Infof(nfsPvcTitle + "Deleting (by ownerReference) NFS export StatfulSet: \"%s\"", nfsStsName )
 	klog.Infof(nfsPvcTitle + "Deleting (by ownerReference) NFS export SVC: \"%s\"", nfsSvcName )
+	err := p.dclientSet.Resource(pveRes).Delete(context.TODO(), pveName, deleteOptions)
+	klog.Infof( nfsPvcTitle + "Deleting CRD: \"%s\"", err )
 	return nil
 }
 
@@ -351,15 +375,31 @@ func main() {
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 
-	// Create an InClusterConfig and use it to create a client for the controller
-	// to use to communicate with Kubernetes
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		klog.Fatalf("Failed to create config: %v", err)
+	// Connect to Kubernetes
+	kubeconfig := os.Getenv("KUBECONFIG")
+	var config *rest.Config
+	if kubeconfig != "" {
+		// Create an OutOfClusterConfig 
+		var err error
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			klog.Fatalf("Failed to create kubeconfig: %v", err)
+		}
+	} else {
+		// Create an InClusterConfig 
+		var err error
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			klog.Fatalf("Failed to create config: %v", err)
+		}
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		klog.Fatalf("Failed to create client: %v", err)
+	}
+	dclientset, err := dynamic.NewForConfig(config)
+	if err != nil {
+		klog.Fatalf("Failed to create dynamic client: %v", err)
 	}
 
 	// The controller needs to know what the server version is because out-of-tree
@@ -371,7 +411,7 @@ func main() {
 
 	// Create the provisioner: it implements the Provisioner interface expected by
 	// the controller
-	volumeNfsProvisioner := NewVolumeNfsProvisioner(clientset)
+	volumeNfsProvisioner := NewVolumeNfsProvisioner(clientset, dclientset)
 
 	// Start the provision controller
 	// PVs
