@@ -4,7 +4,6 @@ import (
 	"flag"
 	"strconv"
 	"syscall"
-	"strings"
 	"time"
 	"context"
 	
@@ -39,8 +38,7 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 
 	nfsPvcNs := options.PVC.Namespace
 	nfsPvcName := options.PVC.Name
-	nfsPvcNsName := nfsPvcNs + "_" + nfsPvcName
-	nfsPvcTitle := "[" + strings.Replace(nfsPvcNsName, "_", "/", 1) + "] "
+	nfsPvcTitle := "[" + nfsPvcNs + "/" + nfsPvcName + "] "
 	nfsPvName	:= options.PVName
 	nfsStsName	:= nfsPvName + "-nfs-backend"
 	nfsSvcName	:= nfsStsName
@@ -54,8 +52,7 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	klog.Infof( nfsPvcTitle + "data backend SC is \"%s\"", dataScName )
 	klog.Infof( nfsPvcTitle + "NFS Exporter Image is \"%s\"", nfsExporterImage )
 
-	//dataPvcName := strings.Replace(nfsPvName, "pvc-", "data-", 1) + "-0"
-	dataPvcName := "data-" + nfsStsName + "-0"
+	dataPvcName := nfsStsName + "-0"
 
 	// create data backend PVC
 	klog.Infof(nfsPvcTitle + "Creating data backend PVC \"%s\"", dataPvcName )
@@ -68,7 +65,9 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 			Name: dataPvcName,
 			Labels: map[string]string{
 				"nfs.volume.io/data-sts": nfsStsName,
-				"nfs.volume.io/nfs-pvc": nfsPvcNsName,
+				"nfs.volume.io/nfs-pvc": nfsPvcName,
+				"nfs.volume.io/nfs-pvc-namespace": nfsPvcNs,
+				"nfs.volume.io/nfs-pv": nfsPvName,
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
@@ -102,8 +101,9 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nfsSvcName,
 			Labels: map[string]string{
-				"nfs.volume.io/data-sts": nfsStsName,
-				"nfs.volume.io/nfs-pvc": nfsPvcNsName,
+				"nfs.volume.io/nfs-pvc": nfsPvcName,
+				"nfs.volume.io/nfs-pvc-namespace": nfsPvcNs,
+				"nfs.volume.io/nfs-pv": nfsPvName,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
@@ -116,7 +116,7 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-					"nfs.volume.io/data-sts": nfsStsName,
+					"nfs.volume.io/nfs-pv": nfsPvName,
 				},
 			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
@@ -160,6 +160,11 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	nfsStsDef := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nfsStsName,
+			Labels: map[string]string{
+				"nfs.volume.io/nfs-pvc": nfsPvcName,
+				"nfs.volume.io/nfs-pvc-namespace": nfsPvcNs,
+				"nfs.volume.io/nfs-pv": nfsPvName,
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion:         "v1",
@@ -174,14 +179,15 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 			ServiceName: nfsStsName,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"nfs.volume.io/data-sts": nfsStsName,
+					"nfs.volume.io/nfs-pv": nfsPvName,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"nfs.volume.io/data-sts": nfsStsName,
-						"nfs.volume.io/nfs-pvc": nfsPvcNsName,
+						"nfs.volume.io/nfs-pvc": nfsPvcName,
+						"nfs.volume.io/nfs-pvc-namespace": nfsPvcNs,
+						"nfs.volume.io/nfs-pv": nfsPvName,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -270,6 +276,11 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	nfsPV := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
+			Labels: map[string]string{
+				"nfs.volume.io/data-pvc": dataPvcName,
+				"nfs.volume.io/data-pvc-namespace": dataPvcName,
+				"nfs.volume.io/data-pv": dataPvName,
+			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			PersistentVolumeReclaimPolicy: *options.StorageClass.ReclaimPolicy,
@@ -293,9 +304,9 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 // by the given PV.
 func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.PersistentVolume) error {
 	nfsPvName := volume.ObjectMeta.Name
-	nfsStsName := nfsPvName
+	nfsStsName	:= nfsPvName + "-nfs-backend"
 	nfsSvcName := nfsStsName
-	dataPvcName := "data-" + nfsStsName + "-0"
+	dataPvcName := nfsStsName + "-0"
 	dataPvcNs := "volume-nfs"
 
 	deletePolicy := metav1.DeletePropagationForeground
@@ -303,9 +314,6 @@ func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.Persis
 		PropagationPolicy: &deletePolicy,
 	}
 
-	// dataPvc, _ := p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Get(context.TODO(), dataPvcName, metav1.GetOptions{})
-	// nfsPvcNsName := dataPvc.ObjectMeta.Labels["nfs.volume.io/nfs-pvc"]
-	// nfsPvcTitle := "[" + strings.Replace(nfsPvcNsName, "_", "/", 1) + "] "
 	nfsPvcNs := volume.Spec.ClaimRef.Namespace
 	nfsPvcName := volume.Spec.ClaimRef.Name
 	nfsPvcTitle := "[" + nfsPvcNs + "/" + nfsPvcName + "] "
