@@ -126,8 +126,13 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 					Port:		2049,
 				},
 				{
-					Name:		"rpc",
+					Name:		"rpc-tcp",
 					Protocol:	corev1.ProtocolTCP,
+					Port:		111,
+				},
+				{
+					Name:		"rpc-udp",
+					Protocol:	corev1.ProtocolUDP,
 					Port:		111,
 				},
 			},
@@ -212,8 +217,13 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 									ContainerPort: 2049,
 								},
 								{
-									Name:          "rpc",
+									Name:          "rpc-tcp",
 									Protocol:      corev1.ProtocolTCP,
+									ContainerPort: 111,
+								},
+								{
+									Name:          "rpc-udp",
+									Protocol:      corev1.ProtocolUDP,
 									ContainerPort: 111,
 								},
 							},
