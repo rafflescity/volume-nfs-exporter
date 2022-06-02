@@ -36,7 +36,8 @@ spec:
               fieldPath: spec.nodeName
         resources: {}
         args: 
-        - -name=nfs.volume.io      
+        - -name=nfs.volume.io
+        - -leader-elect=false
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:

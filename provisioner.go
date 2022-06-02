@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"strconv"
-	"strings"
 	"syscall"
+	"strings"
 	"time"
 	"context"
 	
@@ -39,9 +39,10 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 
 	nfsPvcNs := options.PVC.Namespace
 	nfsPvcName := options.PVC.Name
-	nfsPVcNsName := "[" + nfsPvcNs + "/" + nfsPvcName + "] "
+	nfsPvcNsName := nfsPvcNs + "_" + nfsPvcName
+	nfsPvcTitle := "[" + strings.Replace(nfsPvcNsName, "_", "/", 1) + "] "
 	nfsPvName	:= options.PVName
-	nfsStsName	:= nfsPvName
+	nfsStsName	:= nfsPvName + "-nfs-backend"
 	nfsSvcName	:= nfsStsName
 
 	dataPvcNs := "volume-nfs"
@@ -50,20 +51,25 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	nfsExporterImage := options.StorageClass.Parameters[ "nfsExporterImage" ]
 	if nfsExporterImage == "" { nfsExporterImage = "daocloud.io/piraeus/volume-nfs-exporter:ganesha" }
 
-	klog.Infof( nfsPVcNsName + "Data backend SC is \"%s\"", dataScName )
-	klog.Infof( nfsPVcNsName +  "NFS Exporter Image is \"%s\"", nfsExporterImage )
+	klog.Infof( nfsPvcTitle + "data backend SC is \"%s\"", dataScName )
+	klog.Infof( nfsPvcTitle + "NFS Exporter Image is \"%s\"", nfsExporterImage )
 
-	dataPvcName := strings.Replace(nfsPvName, "pvc-", "data-", 1) + "-0"
+	//dataPvcName := strings.Replace(nfsPvName, "pvc-", "data-", 1) + "-0"
+	dataPvcName := "data-" + nfsStsName + "-0"
 
-	// create Data backend PVC
-	klog.Infof(nfsPVcNsName + "Creating Data backend PVC \"%s\"", dataPvcName )
+	// create data backend PVC
+	klog.Infof(nfsPvcTitle + "Creating data backend PVC \"%s\"", dataPvcName )
 	capacity := options.PVC.Spec.Resources.Requests[corev1.ResourceName(corev1.ResourceStorage)]
 	size := strconv.FormatInt( capacity.Value(), 10 )
-	klog.Infof( nfsPVcNsName + "Data backend PVC size is \"%s\"", size )
+	klog.Infof( nfsPvcTitle + "data backend PVC size is \"%s\"", size )
 
 	dataPvcDef := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: dataPvcName,
+			Labels: map[string]string{
+				"nfs.volume.io/data-sts": nfsStsName,
+				"nfs.volume.io/nfs-pvc": nfsPvcNsName,
+			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			StorageClassName: &dataScName,
@@ -83,30 +89,34 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		panic(err)
 	}
 
-	dataPvcUid := ""
-	for {
-		dataPvcUid = string( dataPvc.ObjectMeta.UID );
-		if dataPvcUid != "" {
-			break
-		}
-	}
+	dataPvcUid := dataPvc.ObjectMeta.UID
+	dataPvcUidStr := string(dataPvcUid)
 
-	klog.Infof(nfsPVcNsName + "Data backend PVC uid is \"%s\"", dataPvcUid )
+	klog.Infof(nfsPvcTitle + "data backend PVC uid is \"%s\"", dataPvcUidStr )
 
-	dataPvName := "pvc-" + dataPvcUid
+	dataPvName := "pvc-" + dataPvcUidStr
 
 	// create NFS export SVC
-	klog.Infof(nfsPVcNsName + "NFS Export SVC \"%s\"", nfsSvcName )
+	klog.Infof(nfsPvcTitle + "NFS export SVC \"%s\"", nfsSvcName )
 	nfsSvcDef := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nfsSvcName,
 			Labels: map[string]string{
-				"volume.io/nfs": nfsStsName,
+				"nfs.volume.io/data-sts": nfsStsName,
+				"nfs.volume.io/nfs-pvc": nfsPvcNsName,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "v1",
+					Kind:               "PersistentVolumeClaim",
+					Name:               dataPvcName,
+					UID:                dataPvcUid,
+				},
 			},
 		},
 		Spec: corev1.ServiceSpec{
 			Selector: map[string]string{
-					"volume.io/nfs": nfsStsName,
+					"nfs.volume.io/data-sts": nfsStsName,
 				},
 			Type: corev1.ServiceTypeClusterIP,
 			Ports: []corev1.ServicePort{
@@ -135,34 +145,43 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		nfsSvc, err := p.clientSet.CoreV1().Services(dataPvcNs).Get(context.TODO(), nfsSvcName, metav1.GetOptions{})
 		if err == nil {
 			nfsIp = nfsSvc.Spec.ClusterIP;
-			klog.Infof(nfsPVcNsName + "NFS export IP is \"%s\"", nfsIp)
+			klog.Infof(nfsPvcTitle + "NFS export IP is \"%s\"", nfsIp)
 		} else {
-			klog.Infof(nfsPVcNsName + "Waiting for NFS SVC to spawn: \"%s\"", nfsSvcName)
+			klog.Infof(nfsPvcTitle + "Waiting for NFS SVC to spawn: \"%s\"", nfsSvcName)
 		}
 		if nfsIp != "" {
 			break
 		} 
 	}
 
-	// create NFS Export Pod to connect NFS Export SVC with Data backend PVC
-	klog.Infof(nfsPVcNsName + "Creating NFS export pod by StatefulSet: \"%s\"", nfsStsName)
+	// create NFS export Pod to connect NFS export SVC with data backend PVC
+	klog.Infof(nfsPvcTitle + "Creating NFS export pod by StatefulSet: \"%s\"", nfsStsName)
 
 	nfsStsDef := &appsv1.StatefulSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: nfsStsName,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion:         "v1",
+					Kind:               "PersistentVolumeClaim",
+					Name:               dataPvcName,
+					UID:                dataPvcUid,
+				},
+			},
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas: int32Ptr(1),
 			ServiceName: nfsStsName,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"volume.io/nfs": nfsStsName,
+					"nfs.volume.io/data-sts": nfsStsName,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"volume.io/nfs": nfsStsName,
+						"nfs.volume.io/data-sts": nfsStsName,
+						"nfs.volume.io/nfs-pvc": nfsPvcNsName,
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -238,16 +257,16 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		nfsPod, err := p.clientSet.CoreV1().Pods(dataPvcNs).Get(context.TODO(), nfsPodName, metav1.GetOptions{})
 		if err == nil {
 			nfsPodStatus = nfsPod.Status.Phase;
-			klog.Infof( nfsPVcNsName + "NFS export Pod status is: \"%s\"", nfsPodStatus )
+			klog.Infof( nfsPvcTitle + "NFS export Pod status is: \"%s\"", nfsPodStatus )
 		} else {
-			klog.Infof( nfsPVcNsName + "Waiting for NFS export Pod to spawn: \"%s\"", nfsPodName )
+			klog.Infof( nfsPvcTitle + "Waiting for NFS export Pod to spawn: \"%s\"", nfsPodName )
 		}
 		if nfsPodStatus == corev1.PodRunning {
 			break
 		}
 	}
 
-	// Create NFS PV (and return it)
+	// create NFS PV (and return it)
 	nfsPV := &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
@@ -276,31 +295,41 @@ func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.Persis
 	nfsPvName := volume.ObjectMeta.Name
 	nfsStsName := nfsPvName
 	nfsSvcName := nfsStsName
-	dataPvcName := strings.Replace(nfsStsName, "pvc-", "data-", 1) + "-0"
+	dataPvcName := "data-" + nfsStsName + "-0"
 	dataPvcNs := "volume-nfs"
-
-	// delete NFS export pod, NFS export svc, and Data Backend PVC
-	klog.Infof("Deleting NFS export Pod by StatfulSet: \"%s\"", nfsStsName )
 
 	deletePolicy := metav1.DeletePropagationForeground
 	deleteOptions := metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	}
 
-	_ = p.clientSet.AppsV1().StatefulSets(dataPvcNs).Delete(context.TODO(), nfsStsName, deleteOptions)
-	klog.Infof("Deleting NFS export SVC: \"%s\"", nfsSvcName )
-	_ = p.clientSet.CoreV1().Services(dataPvcNs).Delete(context.TODO(), nfsSvcName, deleteOptions)
-	klog.Infof("Deleting Data backend PVC: \"%s\"", dataPvcName )
+	// dataPvc, _ := p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Get(context.TODO(), dataPvcName, metav1.GetOptions{})
+	// nfsPvcNsName := dataPvc.ObjectMeta.Labels["nfs.volume.io/nfs-pvc"]
+	// nfsPvcTitle := "[" + strings.Replace(nfsPvcNsName, "_", "/", 1) + "] "
+	nfsPvcNs := volume.Spec.ClaimRef.Namespace
+	nfsPvcName := volume.Spec.ClaimRef.Name
+	nfsPvcTitle := "[" + nfsPvcNs + "/" + nfsPvcName + "] "
+
+	// delete NFS export pod, NFS export svc, and data backend PVC
+	// klog.Infof("Deleting NFS export Pod by StatfulSet: \"%s\"", nfsStsName )
+	// _ = p.clientSet.AppsV1().StatefulSets(dataPvcNs).Delete(context.TODO(), nfsStsName, deleteOptions)
+	// klog.Infof("Deleting NFS export SVC: \"%s\"", nfsSvcName )
+	// _ = p.clientSet.CoreV1().Services(dataPvcNs).Delete(context.TODO(), nfsSvcName, deleteOptions)
+	klog.Infof( nfsPvcTitle + "Deleting data backend PVC: \"%s\"", dataPvcName )
 	_ = p.clientSet.CoreV1().PersistentVolumeClaims(dataPvcNs).Delete(context.TODO(), dataPvcName, deleteOptions)
+	klog.Infof(nfsPvcTitle + "Deleting (by ownerReference) NFS export StatfulSet: \"%s\"", nfsStsName )
+	klog.Infof(nfsPvcTitle + "Deleting (by ownerReference) NFS export SVC: \"%s\"", nfsSvcName )
 	return nil
 }
 
 func main() {
 	syscall.Umask(0)
 
-	// Provisoner name
-	provisionerName := flag.String("name", "nfs.volume.io", "a string")
+	// Cmd Options
+	provisionerName := flag.String("name", "nfs.volume.io", "Set the provisoner name. Default \"nfs.volume.io\"")
+	leaderElection := flag.Bool("leader-elect", false, "Start a leader election client and gain leadership before executing the main loop. Enable this when running replicated components for high availability. Default false.")
 
+	
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 
@@ -328,7 +357,13 @@ func main() {
 
 	// Start the provision controller
 	// PVs
-	pc := controller.NewProvisionController(clientset, *provisionerName, volumeNfsProvisioner, serverVersion.GitVersion)
+	pc := controller.NewProvisionController(
+		clientset, 
+		*provisionerName, 
+		volumeNfsProvisioner, 
+		serverVersion.GitVersion,
+		controller.LeaderElection(*leaderElection),
+	)
 	
 	// Never stops.
 	pc.Run(context.Background())
