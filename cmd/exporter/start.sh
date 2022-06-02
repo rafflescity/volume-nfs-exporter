@@ -10,8 +10,8 @@ set -e
 # : ${GANESHA_EXPORT:="/export"}
 # : ${GANESHA_ACCESS:="*"}
 # : ${GANESHA_ROOT_ACCESS:="*"}
-: ${GANESHA_NFS_PROTOCOLS:="3,4"}
-: ${GANESHA_TRANSPORTS:="UDP,TCP"}
+# : ${GANESHA_NFS_PROTOCOLS:="3,4"}
+# : ${GANESHA_TRANSPORTS:="UDP,TCP"}
 export GANESHA_EXPORT=${EXPORT_PATH:-/export}
 export GANESHA_PSEUDO=${PSEUDO_PATH:-/}
 
@@ -33,12 +33,10 @@ EXPORT
 		# Access control options
 		Access_Type = RW;
 		Squash = none;
-		# Root_Access = "${GANESHA_ROOT_ACCESS}";
-		# Access = "${GANESHA_ACCESS}";
 
 		# NFS protocol options
-		Transports = "${GANESHA_TRANSPORTS}";
-		Protocols = "${GANESHA_NFS_PROTOCOLS}";
+        Protocols = 3, 4;
+        Transports = "UDP", "TCP";
 
 		SecType = "sys";
 
