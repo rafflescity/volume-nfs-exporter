@@ -2,9 +2,9 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: volume-nfs-sc
-provisioner: nfs.volume.io
+provisioner: nfsexport.rafflescity.io
 reclaimPolicy: Delete
 parameters:
-  nfsExportImage: daocloud.io/piraeus/volume-nfs-exporter:ganesha
-  dataBackendStorageClass: local-path
-  # dataBackendStorageClass: piraeus-local-dflt-r2
+  nfsExporterImage: daocloud.io/piraeus/volume-nfs-exporter:ganesha
+  backendStorageClass: local-path
+  # backendStorageClass: piraeus-local-dflt-r2

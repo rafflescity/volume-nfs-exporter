@@ -1,7 +1,7 @@
 kind: Namespace
 apiVersion: v1
 metadata:
-  name: volume-nfs
+  name: volume-nfs-export
 ---
 apiVersion: apps/v1
 kind: Deployment
