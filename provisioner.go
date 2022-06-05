@@ -38,15 +38,24 @@ var _ controller.Provisioner = &volumeNfsProvisioner{}
 // Provision creates a storage asset and returns a PV object representing it.
 func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller.ProvisionOptions) (*corev1.PersistentVolume, controller.ProvisioningState, error) {
 	capacity := options.PVC.Spec.Resources.Requests[corev1.ResourceName(corev1.ResourceStorage)]
+	backendScName := options.StorageClass.Parameters[ "backendStorageClass" ]
+	backendNamespaceAggregation := options.StorageClass.Parameters[ "backendNamespaceAggregation" ]
+	backendPvcNs := options.StorageClass.Parameters[ "backendNamespace" ]
+
+	if backendNamespaceAggregation == "false" {
+		backendPvcNs = options.PVC.Namespace
+	} else if backendPvcNs == "" {
+		backendPvcNs = "volume-nfs-export"
+	}
 
 	vneDef := &volumeNfsExport{
 		FrontendPvcNs:	 	options.PVC.Namespace,
 		FrontendPvcName:	options.PVC.Name,
 		FrontendPvName:		options.PVName,
 	
-		BackendScName: 		options.StorageClass.Parameters[ "backendStorageClass" ],
+		BackendScName: 		backendScName,
 	
-		BackendPvcNs: 		"volume-nfs-export",
+		BackendPvcNs: 		backendPvcNs,
 		BackendPvcName: 	options.PVName + "-backend",
 		BackendPvName:		"",
 
@@ -67,9 +76,10 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
 			Labels: map[string]string{
+				"nfsexport.rafflescity.io/backend-pvc-namespace": vne.BackendPvcNs,
 				"nfsexport.rafflescity.io/backend-pvc": vne.BackendPvcName,
-				"nfsexport.rafflescity.io/backend-pvc-namespace": vne.BackendPvcName,
-				"nfsexport.rafflescity.io/backend-pv": vne.BackendPvName,
+				"nfsexport.rafflescity.io/backend-Pod": vne.BackendPodName,
+				"nfsexport.rafflescity.io/backend-Svc": vne.BackendSvcName,
 			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -94,34 +104,37 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 // by the given PV.
 func (p *volumeNfsProvisioner) Delete(ctx context.Context, volume *corev1.PersistentVolume) error {
 	frontendPvName := volume.ObjectMeta.Name
-	backendPodName	:= frontendPvName + "-backend"
-	backendSvcName := backendPodName
-	backendPvcName := backendPodName
-	backendPvcNs := "volume-nfs-export"
-	vecName := frontendPvName
-	veName := frontendPvName
+	frontendPvcNs := volume.Spec.ClaimRef.Namespace
+	frontendPvcName := volume.Spec.ClaimRef.Name
+	
+	backendPvcNs := volume.ObjectMeta.Labels["nfsexport.rafflescity.io/backend-pvc-namespace"]
+	backendPvcName := volume.ObjectMeta.Labels["nfsexport.rafflescity.io/backend-pvc"]
+	backendPodName	:= volume.ObjectMeta.Labels["nfsexport.rafflescity.io/backend-pod"]
+	backendSvcName := volume.ObjectMeta.Labels["nfsexport.rafflescity.io/backend-svc"]
+
+	logId := "[" + frontendPvcNs + "/" + frontendPvcName + "] "
+	volumeExportName := frontendPvName
+	volumeExportContentName := frontendPvName
 
 	deletePolicy := metav1.DeletePropagationForeground
 	deleteOptions := metav1.DeleteOptions{
 		PropagationPolicy: &deletePolicy,
 	}
 
-	frontendPvcNs := volume.Spec.ClaimRef.Namespace
-	frontendPvcName := volume.Spec.ClaimRef.Name
-	logId := "[" + frontendPvcNs + "/" + frontendPvcName + "] "
-
 	// Delete frontend pod, frontend svc, and backend PVC
 	// klog.Infof("Deleting frontend Pod: \"%s\"", backendPodName )
 	// _ = p.ClientSet.CoreV1().Pods(backendPvcNs).Delete(context.TODO(), backendPodName, deleteOptions)
 	// klog.Infof("Deleting frontend SVC: \"%s\"", backendSvcName )
 	// _ = p.ClientSet.CoreV1().Services(backendPvcNs).Delete(context.TODO(), backendSvcName, deleteOptions)
-	klog.Infof( logId + "Deleting (by ownerReference) backend PVC: \"%s\"", backendPvcName )
-	// _ = p.ClientSet.CoreV1().PersistentVolumeClaims(backendPvcNs).Delete(context.TODO(), backendPvcName, deleteOptions)
+	klog.Infof( logId + "Deleting backend PVC: \"%s\"", backendPvcName )
+	_ = p.ClientSet.CoreV1().PersistentVolumeClaims(backendPvcNs).Delete(context.TODO(), backendPvcName, deleteOptions)
 	klog.Infof(logId + "Deleting (by ownerReference) frontend Pod: \"%s\"", backendPodName )
 	klog.Infof(logId + "Deleting (by ownerReference) frontend SVC: \"%s\"", backendSvcName )
-	err := p.DclientSet.Resource(vecRes).Delete(context.TODO(), vecName, deleteOptions)
-	err = p.DclientSet.Resource(veRes).Namespace(backendPvcNs).Delete(context.TODO(), veName, deleteOptions)
-	klog.Infof( logId + "Deleting CRD: \"%s\"", err )
+
+	err := p.DclientSet.Resource(veRes).Namespace(backendPvcNs).Delete(context.TODO(), volumeExportName, deleteOptions)
+	klog.Infof( logId + "Deleting CRD VolumeExport: \"%s\"", err )
+	err = p.DclientSet.Resource(vecRes).Delete(context.TODO(), volumeExportContentName, deleteOptions)
+	klog.Infof( logId + "Deleting CRD VolumeExportContent: \"%s\"", err )
 	return nil
 }
 

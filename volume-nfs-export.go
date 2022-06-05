@@ -4,13 +4,10 @@ import (
 	"strconv"
 	"time"
 	"context"
-	"fmt"
-	// "encoding/json"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
-	types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
@@ -58,28 +55,6 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 	klog.Infof( v.LogID + "Backend SC is \"%s\"", v.BackendScName )
 	klog.Infof( v.LogID + "NFS Exporter Image is \"%s\"", v.NfsExporterImage )
 
-	// Create CRD volumeExport
-	veDef := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "nfsexport.rafflescity.io/v1alpha1",
-			"kind":       "VolumeExport",
-			"metadata": map[string]interface{}{
-				"name": v.FrontendPvName,
-				"namespace": v.BackendPvcNs,
-			},
-			"spec": map[string]interface{}{
-				"backendVolumeClaim": v.BackendPvcName,
-				"nfsExport": "",
-			},
-		},
-	}
-	ve, err := dcs.Resource(veRes).Namespace(v.BackendPvcNs).Create(context.TODO(), veDef, metav1.CreateOptions{})
-	klog.Infof( v.LogID + "Creating CRD VolumeExport: \"%s\"", err )
-	// bs, _ := json.Marshal(ve)
-	//klog.Infof( v.LogID + "Print unstructured: \"%s\"", string(bs) )
-	volumeExportName := v.FrontendPvName
-	volumeExportUid := types.UID(fmt.Sprintf( "%s", ve.Object["metadata"].(map[string]interface{})["uid"] ))
-
 	// Create backend PVC
 	klog.Infof(v.LogID + "Creating backend PVC \"%s\"", v.BackendPvcName )
 	size := strconv.FormatInt( v.Capacity.Value(), 10 )
@@ -88,14 +63,6 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 	backendPvcDef := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: v.BackendPvcName,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         "nfsexport.rafflescity.io/v1alpha1",
-					Kind:               "VolumeExport",
-					Name:               volumeExportName,
-					UID:                volumeExportUid,
-				},
-			},
 			Labels: map[string]string{
 				"nfsexport.rafflescity.io/frontend-pod": v.BackendPodName,
 				"nfsexport.rafflescity.io/frontend-pvc": v.FrontendPvcName,
@@ -121,11 +88,9 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 		panic(err)
 	}
 
-	backendPvcUidStr := string(backendPvc.ObjectMeta.UID)
-
-	klog.Infof(v.LogID + "Backend PVC uid is \"%s\"", backendPvcUidStr )
-
-	v.BackendPvName = "pvc-" + backendPvcUidStr
+	backendPvcUid := backendPvc.ObjectMeta.UID
+	klog.Infof(v.LogID + "Backend PVC uid is \"%s\"", backendPvcUid )
+	v.BackendPvName = "pvc-" + string( backendPvcUid )
 
 	// Create frontend SVC
 	klog.Infof(v.LogID + "Frontend SVC \"%s\"", v.BackendSvcName )
@@ -139,10 +104,10 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion:         "nfsexport.rafflescity.io/v1alpha1",
-					Kind:               "VolumeExport",
-					Name:               volumeExportName,
-					UID:                volumeExportUid,
+					APIVersion:         "v1",
+					Kind:               "PersistentVolumeClaim",
+					Name:               v.BackendPvcName,
+					UID:                backendPvcUid,
 				},
 			},
 		},
@@ -204,10 +169,10 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion:         "nfsexport.rafflescity.io/v1alpha1",
-					Kind:               "VolumeExport",
-					Name:               volumeExportName,
-					UID:                volumeExportUid,
+					APIVersion:         "v1",
+					Kind:               "PersistentVolumeClaim",
+					Name:               v.BackendPvcName,
+					UID:                backendPvcUid,
 				},
 			},
 		},
@@ -284,6 +249,24 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 			break
 		}
 	}
+
+		// Create CRD volumeExport
+		veDef := &unstructured.Unstructured{
+			Object: map[string]interface{}{
+				"apiVersion": "nfsexport.rafflescity.io/v1alpha1",
+				"kind":       "VolumeExport",
+				"metadata": map[string]interface{}{
+					"name": v.FrontendPvName,
+					"namespace": v.FrontendPvcNs,
+				},
+				"spec": map[string]interface{}{
+					"backendVolumeClaim":	v.BackendPvcNs + "/" + v.BackendPvcName,
+					"nfsExport":			v.BackendClusterIp + ":/",
+				},
+			},
+		}
+		_, err = dcs.Resource(veRes).Namespace(v.BackendPvcNs).Create(context.TODO(), veDef, metav1.CreateOptions{})
+		klog.Infof( v.LogID + "Creating CRD VolumeExport: \"%s\"", err )
 
 	// Create CRD volumeExportContent
 	vecDef := &unstructured.Unstructured{

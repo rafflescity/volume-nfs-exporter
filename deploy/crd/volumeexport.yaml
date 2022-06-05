@@ -62,7 +62,7 @@ spec:
 apiVersion: nfsexport.rafflescity.io/v1alpha1
 kind: VolumeExport
 metadata:
-  name: iam
+  name: example
 spec:
-  backendVolumeClaim: not
-  nfsExport: here
+  backendVolumeClaim: dummy
+  nfsExport: dummy

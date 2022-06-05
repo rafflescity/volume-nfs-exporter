@@ -55,6 +55,6 @@ spec:
 apiVersion: nfsexport.rafflescity.io/v1alpha1
 kind: VolumeExportContent
 metadata:
-  name: just
+  name: example
 spec:
-  backendVolume: do
+  backendVolume: dummy
