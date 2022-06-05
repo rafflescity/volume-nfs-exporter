@@ -51,10 +51,10 @@ spec:
     storage: true
     subresources:
       status: {}
----
-apiVersion: nfsexport.rafflescity.io/v1alpha1
-kind: VolumeExportContent
-metadata:
-  name: example
-spec:
-  backendVolume: dummy
+# ---
+# apiVersion: nfsexport.rafflescity.io/v1alpha1
+# kind: VolumeExportContent
+# metadata:
+#   name: example
+# spec:
+#   backendVolume: dummy

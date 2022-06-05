@@ -10,13 +10,13 @@ run:
 	go run ./
 
 install:
-	kubectl apply -f deploy/crd.yaml
+	kubectl apply -f deploy/crd
 	kubectl apply -f deploy/rbac.yaml
 	kubectl apply -f deploy/provisioner.yaml
 	watch kubectl get po
 
 uninstall:
-	kubectl delete -f deploy/crd.yaml --wait=false || true
+	kubectl delete -f deploy/crd --wait=false || true
 	kubectl delete -f deploy/rbac.yaml --wait=false || true
 	kubectl delete -f deploy/provisioner.yaml --wait=false || true
 	watch kubectl get po

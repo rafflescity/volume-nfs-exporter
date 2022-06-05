@@ -17,9 +17,6 @@ import (
 	"k8s.io/klog"
 )
 
-
-
-
 type volumeNfsProvisioner struct {
 	ClientSet *kubernetes.Clientset
 	DclientSet dynamic.Interface
@@ -41,6 +38,7 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 	backendScName := options.StorageClass.Parameters[ "backendStorageClass" ]
 	backendNamespaceAggregation := options.StorageClass.Parameters[ "backendNamespaceAggregation" ]
 	backendPvcNs := options.StorageClass.Parameters[ "backendNamespace" ]
+	logId := "[" + options.PVC.Namespace + "/" + options.PVC.Name + "] "
 
 	if backendNamespaceAggregation == "false" {
 		backendPvcNs = options.PVC.Namespace
@@ -63,10 +61,10 @@ func (p *volumeNfsProvisioner) Provision(ctx context.Context, options controller
 		NfsExporterImage: 	options.StorageClass.Parameters["nfsExporterImage"],
 	
 		BackendSvcName:		options.PVName + "-backend",
-		BackendClusterIp:    "",
+		BackendClusterIp:   "",
 
 		Capacity: 			capacity,
-		LogID:				"[" + options.PVC.Namespace + "/" + options.PVC.Name + "] ",
+		LogID:				logId,
 	}
 
 	vne := CreateVolumeNfsExport(vneDef, p.ClientSet, p.DclientSet)
@@ -145,7 +143,6 @@ func main() {
 	provisionerName := flag.String("name", "nfsexport.rafflescity.io", "Set the provisoner name. Default \"nfsexport.rafflescity.io\"")
 	leaderElection := flag.Bool("leader-elect", false, "Start a leader election client and gain leadership before executing the main loop. Enable this when running replicated components for high availability. Default false.")
 
-	
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 

@@ -55,6 +55,10 @@ func CreateVolumeNfsExport(v *volumeNfsExport, cs *kubernetes.Clientset, dcs dyn
 	klog.Infof( v.LogID + "Backend SC is \"%s\"", v.BackendScName )
 	klog.Infof( v.LogID + "NFS Exporter Image is \"%s\"", v.NfsExporterImage )
 
+	if v.BackendClusterIp != "" {
+		return v
+	}
+
 	// Create backend PVC
 	klog.Infof(v.LogID + "Creating backend PVC \"%s\"", v.BackendPvcName )
 	size := strconv.FormatInt( v.Capacity.Value(), 10 )
